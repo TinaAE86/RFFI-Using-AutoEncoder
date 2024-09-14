@@ -2,3 +2,4 @@ pip3 install torch torchvision torchaudio --index-url https://download.pytorch.o
 pip install matplotlib;
 pip install tensorboard;
 pip install tqdm;
+pip install scipy;

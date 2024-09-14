@@ -32,7 +32,7 @@ class PreTrain():
         #定义网络模型，并指定数据精度为float64
         self.model=AE1d_v3(ch=encode_channels,ker=kernel_size).double()
         #将网络模型加载至GPU
-        self.model.to(self.device)
+        self.model=self.model.to(self.device)
         #定义优化器
         self.optim=torch.optim.Adam(self.model.parameters(),lr=lr)
         #训练网络

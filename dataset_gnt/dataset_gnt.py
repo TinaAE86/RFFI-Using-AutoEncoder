@@ -9,6 +9,7 @@ import pickle as pkl
 import os
 import math
 from tqdm import tqdm,trange
+from model.ae import *
 
 pi=math.pi
 
@@ -127,12 +128,33 @@ class RFFDataset(Dataset):
         self.t_arr=t_arr
         self.rb=rb
         self.label=label
+        self.Mn=len(self.label)
+        self.tensored=False  #标志是否已经tensor化
+        self.rbn_tensor: Optional[torch.Tensor]=None
+        self.label_tensor:Optional[torch.Tensor]=None
+        # self.rb1n_tensor:Optional[torch.Tensor]=None
+
+    def crt_tensor(self):
+        rbn: np.ndarray=np.empty_like(self.rb)
+        #首先进行min-max normalization
+        for i in range(self.Mn):
+            rb_max=np.max(self.rb[i])
+            rb_min=np.min(self.rb[i])
+            rbn[i]=(self.rb[i]-rb_min)/(rb_max-rb_min)
+        #创建归一化后的tensor
+        self.rbn_tensor=torch.from_numpy(rbn)
+        self.label_tensor=torch.from_numpy(self.label).long()
+        #最后标记已经tensor化
+        self.tensored=True
 
     def __len__(self):
-        return len(self.label)
+        return self.Mn
 
     def __getitem__(self, idx):
-        return self.rb[idx],self.label[idx]
+        if self.tensored:
+            return self.rbn_tensor[idx],self.label_tensor[idx]
+        else:
+            return self.rb[idx],self.label[idx]
 
 class DatasetGnt:
     def __init__(self,T,N,fc,SF,M,beta1,beta2,phi1,phi2,c21,c22,c31,c32):
@@ -316,10 +338,11 @@ class DatasetGnt:
         :param n: preamble的发送次数
         :param gamma_r: 接收端SNR
         '''
-        print('generating rff_dataset...')
+        print('generating rff dataset...')
         #更新器件
         self.refresh_dev()
         #初始化RFF数据集的r和label
+        t_arr=np.linspace(start=0,stop=self.T,num=self.N,endpoint=False)
         r=np.empty(shape=(self.M*n,self.N),dtype=np.complex128)
         label=np.empty(self.M*n,dtype=int)
         #建立RFF数据集
@@ -328,26 +351,33 @@ class DatasetGnt:
             pbar.set_description(f'now processing device {i}')
             #计算当前器件i发送信号的功率ps_i
             rff_arr=self.lsc_list[i].rff_arr
-            # rff_mat=np.mat(rff_arr)
-            # rff_mat_h=np.transpose(rff_mat.conjugate())
-            # ps_i=((1/self.N*rff_mat*rff_mat_h).real).item()
             rff_arr_r, rff_arr_i = rff_arr.real, rff_arr.imag
-            ps_i = np.inner(rff_arr_r, rff_arr_r) + np.inner(rff_arr_i, rff_arr_i)
+            ps_i=1/self.N*(np.inner(rff_arr_r,rff_arr_r)+np.inner(rff_arr_i,rff_arr_i))
             # 根据输入信噪比计算噪声功率
             pn_r=ps_i*math.pow(10,-gamma_r/10)
             for j in range(n):
                 #计算当前数据在数据集中的索引
-                idx=i*self.M+j
+                idx=i*n+j
                 r[idx]=rff_arr+self.gnt_gaussian_noise(self.N,pn_r)
                 label[idx]=int(i)
-        t_arr=self.lsc_list[0].t_arr
-        rff_dataset=RFFDataset(t_arr,r,label)
+        #下面对带通信号进行理想解调得到基带信号
+        print('demodulating...')
+        demodulator=np.exp(1j*2*pi*self.fc*t_arr)
+        #rbc为复信号数组
+        rbc:np.ndarray=r*demodulator
+        Mn=self.M*n
+        rb=np.empty(shape=(Mn,2,self.N),dtype=np.float64)
+        for i in range(Mn):
+            rb[i][0]=rbc[i].real
+            rb[i][1]=rbc[i].imag
+        rff_dataset:RFFDataset=RFFDataset(t_arr,rb,label)
         rff_dataset_root='../dataset'
         filename=f'rff_dataset_{rff_dataset_version}.pkl'
         path=os.path.abspath(os.path.join(rff_dataset_root,filename))
         fw=open(path,'wb')
         pkl.dump(rff_dataset,fw)
         fw.close()
+        print(f'rff dataset saved at {path}')
 
 
     @staticmethod
